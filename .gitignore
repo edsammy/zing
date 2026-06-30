@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# uv
+uv.lock
+
+# Generated data
+*.csv
+
+# Build output
+out/
+build/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.map
+*.dis
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,8 @@
+[project]
+name = "current-monitor"
+version = "0.1.0"
+description = "INA228 current monitor logger"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pyserial>=3.5",
+]

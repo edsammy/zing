@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zing</title>
+<script src="lightweight-charts.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+html, body {
+  height: 100%;
+}
+body {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  margin: 0; padding: 12px;
+  background: #0a0a0a; color: #33ff33;
+  font-size: 13px; line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.tui-box {
+  border: 2px solid #33ff33;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: #0f0f0f;
+  flex-shrink: 0;
+}
+.tui-box .title {
+  color: #33ff33;
+  font-weight: bold;
+  margin: -8px -12px 8px -12px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #33ff33;
+  background: #1a1a1a;
+}
+
+.stats-row {
+  display: flex; gap: 8px; margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.stat-cell {
+  flex: 1; min-width: 140px;
+  border: 1px solid #33ff33;
+  padding: 6px 10px;
+  background: #0f0f0f;
+}
+.stat-label { color: #22aa22; font-size: 0.75rem; }
+.stat-value { color: #33ff33; font-size: 1.3rem; font-weight: bold; font-variant-numeric: tabular-nums; }
+.stat-unit { color: #22aa22; font-size: 0.8rem; }
+.stat-sub { color: #22aa22; font-size: 0.7rem; margin-top: 2px; }
+.avg-window {
+  display: inline-block;
+  min-width: 2em;
+  text-align: center;
+  border-bottom: 1px solid #33ff33;
+  color: #33ff33;
+  cursor: text;
+}
+
+.chart-container {
+  border: 1px solid #33ff33;
+  margin-bottom: 8px;
+  background: #0f0f0f;
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 200px;
+}
+
+.controls {
+  display: flex; gap: 8px; align-items: center;
+  padding: 6px 0; border-top: 1px solid #33ff33;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+button {
+  font-family: 'JetBrains Mono', monospace;
+  background: #0f0f0f; color: #33ff33;
+  border: 1px solid #33ff33;
+  padding: 4px 12px; cursor: pointer;
+  font-size: 12px;
+}
+button:hover { background: #33ff33; color: #0a0a0a; }
+button.active { background: #33ff33; color: #0a0a0a; }
+.status-text { margin-left: auto; color: #22aa22; }
+.status-text.live { color: #33ff33; }
+.status-text.paused { color: #ffaa00; }
+.status-text.offline { color: #ff3333; }
+
+.help {
+  color: #22aa22; font-size: 0.75rem;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: #0a0a0a;
+  border: 1px solid #33ff33;
+  color: #33ff33;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 4px 8px;
+  z-index: 10;
+  display: none;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<div class="tui-box">
+  <div class="title">INA228 POWER MONITOR // 100 Hz // 15mOhm shunt</div>
+  <div class="stats-row">
+    <div class="stat-cell">
+      <div class="stat-label">VOLTAGE</div>
+      <div class="stat-value"><span id="val-v">0.00</span><span class="stat-unit"> V</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">CURRENT</div>
+      <div class="stat-value"><span id="val-i">0.000</span><span class="stat-unit" id="unit-i"> A</span></div>
+      <div class="stat-sub">
+        avg <span id="val-avg-i">0.000</span><span id="unit-avg-i"> A</span>
+        <span class="avg-window" contenteditable="true" id="avg-window">500</span> smpl
+      </div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">POWER</div>
+      <div class="stat-value"><span id="val-p">0.00</span><span class="stat-unit"> W</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">UPTIME</div>
+      <div class="stat-value"><span id="val-uptime">0s</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">CHARGE</div>
+      <div class="stat-value"><span id="val-q">0.000</span><span class="stat-unit"> C</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">ENERGY</div>
+      <div class="stat-value"><span id="val-e">0.000</span><span class="stat-unit"> J</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="chart-container" id="chartI"></div>
+
+<div class="controls">
+  <button id="btn-hold">HOLD [space]</button>
+  <button id="btn-reset">RESET [r]</button>
+  <span class="status-text offline" id="status">Connecting...</span>
+</div>
+<div class="help">
+  WHEEL = zoom // DRAG = pan // DOUBLE-CLICK = reset // SPACE = hold scroll // R = reset
+</div>
+
+<script>
+const maxPoints = 10000;
+let dataI = [];
+let held = false;
+let heldQueue = [];
+
+let avgRing = [];
+let avgWindowSize = 500;
+let startTime = 0;
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h) return `${h}h ${m}m ${sec}s`;
+  if (m) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function pushAvgSample(amps) {
+  avgRing.push(amps);
+  while (avgRing.length > avgWindowSize) avgRing.shift();
+}
+
+function log(msg) { console.log('[dash] ' + msg); }
+function err(msg) { console.error('[dash] ERROR: ' + msg); document.getElementById('status').textContent = 'JS ERROR — see console'; }
+
+let _currentUnit = 'A'; // 'A' | 'mA' | 'µA'
+
+function formatCurrent(amps) {
+  const absA = Math.abs(amps);
+  if (_currentUnit === 'A') {
+    if (absA < 0.9) _currentUnit = 'mA';
+  } else if (_currentUnit === 'mA') {
+    if (absA >= 1.1) _currentUnit = 'A';
+    else if (absA < 0.0009) _currentUnit = 'µA';
+  } else { // µA
+    if (absA >= 0.0011) _currentUnit = 'mA';
+  }
+  if (_currentUnit === 'A') {
+    return { value: amps.toFixed(3), unit: 'A', raw: amps };
+  } else if (_currentUnit === 'mA') {
+    return { value: (amps * 1000).toFixed(3), unit: 'mA', raw: amps };
+  } else {
+    return { value: (amps * 1000000).toFixed(2), unit: 'µA', raw: amps };
+  }
+}
+
+if (typeof LightweightCharts === 'undefined') {
+  err('LightweightCharts library not loaded. Check CDN or network.');
+}
+
+function makeChart(containerId, title, color, fillColor, formatPrice) {
+  const container = document.getElementById(containerId);
+  if (!container) { err('Container #' + containerId + ' not found'); return null; }
+
+  const chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      background: { type: 'solid', color: '#0f0f0f' },
+      textColor: '#22aa22',
+      fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+      fontSize: 11,
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: '#1a331a' },
+      horzLines: { color: '#1a331a' },
+    },
+    rightPriceScale: {
+      borderColor: '#1a331a',
+      scaleMargins: { top: 0.1, bottom: 0.1 },
+    },
+    timeScale: {
+      borderColor: '#1a331a',
+      timeVisible: true,
+      secondsVisible: false,
+      tickMarkFormatter: (time, tickMarkType, locale) => {
+        return time.toFixed(0);
+      },
+    },
+    crosshair: {
+      vertLine: { visible: true, color: '#33ff33', labelVisible: false, style: 3, width: 1 },
+      horzLine: { visible: false, labelVisible: false },
+    },
+    handleScroll: { pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: { axisPressedMouseMove: { time: true, price: true } },
+  });
+
+  const series = chart.addSeries(LightweightCharts.AreaSeries, {
+    lineColor: color,
+    topColor: fillColor,
+    bottomColor: 'rgba(0,0,0,0)',
+    lineWidth: 1.5,
+    priceFormat: { type: 'custom', formatter: formatPrice },
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  // Tooltip
+  const tooltip = document.createElement('div');
+  tooltip.className = 'chart-tooltip';
+  container.appendChild(tooltip);
+
+  chart.subscribeCrosshairMove(param => {
+    if (!param.point || param.time === undefined) {
+      tooltip.style.display = 'none';
+      return;
+    }
+    const data = param.seriesData.get(series);
+    if (!data || data.value === undefined) {
+      tooltip.style.display = 'none';
+      return;
+    }
+    tooltip.style.display = 'block';
+    const x = param.point.x;
+    const y = param.point.y;
+    const tw = tooltip.offsetWidth || 100;
+    const th = tooltip.offsetHeight || 40;
+    let left = x + 12;
+    let top = y + 12;
+    if (left + tw > container.clientWidth) left = x - tw - 12;
+    if (top + th > container.clientHeight) top = y - th - 12;
+    tooltip.style.left = left + 'px';
+    tooltip.style.top = top + 'px';
+    tooltip.innerHTML = `<span style="color:#22aa22">${title}</span><br>${formatPrice(data.value)}`;
+  });
+
+  return { chart, series };
+}
+
+let _chartUnit = 'A'; // 'A' | 'mA' | 'µA'
+
+function formatCurrentChartPrice(amps) {
+  const absA = Math.abs(amps);
+  if (_chartUnit === 'A') {
+    if (absA < 0.9) _chartUnit = 'mA';
+  } else if (_chartUnit === 'mA') {
+    if (absA >= 1.1) _chartUnit = 'A';
+    else if (absA < 0.0009) _chartUnit = 'µA';
+  } else { // µA
+    if (absA >= 0.0011) _chartUnit = 'mA';
+  }
+  if (_chartUnit === 'A') {
+    return amps.toFixed(3) + ' A';
+  } else if (_chartUnit === 'mA') {
+    return (amps * 1000).toFixed(3) + ' mA';
+  } else {
+    return (amps * 1000000).toFixed(2) + ' µA';
+  }
+}
+
+let chartI;
+try {
+  chartI = makeChart('chartI', 'CURRENT', '#33ff33', 'rgba(51,255,51,0.15)', formatCurrentChartPrice);
+  log('Chart initialized');
+} catch (e) {
+  err('Chart init failed: ' + e.message);
+  throw e;
+}
+
+function updateStats(d) {
+  document.getElementById('val-v').textContent = d.v.toFixed(2);
+  const iFmt = formatCurrent(d.i);
+  document.getElementById('val-i').textContent = iFmt.value;
+  document.getElementById('unit-i').textContent = ' ' + iFmt.unit;
+  const avgI = avgRing.length ? avgRing.reduce((a, b) => a + b, 0) / avgRing.length : 0;
+  const avgFmt = formatCurrent(avgI);
+  document.getElementById('val-avg-i').textContent = avgFmt.value;
+  document.getElementById('unit-avg-i').textContent = ' ' + avgFmt.unit;
+  document.getElementById('val-p').textContent = d.p.toFixed(2);
+  if (startTime) {
+    document.getElementById('val-uptime').textContent = formatDuration(performance.now() - startTime);
+  }
+  document.getElementById('val-q').textContent = d.q.toFixed(3);
+  document.getElementById('val-e').textContent = d.e.toFixed(3);
+}
+
+function setStatus(online) {
+  const el = document.getElementById('status');
+  if (!online) {
+    el.className = 'status-text offline';
+    el.textContent = 'OFFLINE';
+  } else if (held) {
+    el.className = 'status-text paused';
+    el.textContent = 'HOLD';
+  } else {
+    el.className = 'status-text live';
+    el.textContent = 'LIVE 100Hz';
+  }
+}
+
+function flushQueue() {
+  if (!heldQueue.length) return;
+  for (const p of heldQueue) {
+    dataI.push(p);
+    if (dataI.length > maxPoints) dataI.shift();
+  }
+  heldQueue = [];
+  if (chartI && chartI.series) chartI.series.setData(dataI);
+  if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
+}
+
+function toggleHold() {
+  held = !held;
+  const btn = document.getElementById('btn-hold');
+  btn.textContent = held ? 'RESUME [space]' : 'HOLD [space]';
+  btn.classList.toggle('active', held);
+  if (!held) {
+    flushQueue();
+  }
+  setStatus(true);
+}
+
+function resetView() {
+  held = false;
+  heldQueue = [];
+  const btn = document.getElementById('btn-hold');
+  btn.textContent = 'HOLD [space]';
+  btn.classList.remove('active');
+  if (chartI && chartI.chart) chartI.chart.timeScale().fitContent();
+  setStatus(true);
+}
+
+document.getElementById('btn-hold').onclick = toggleHold;
+document.getElementById('btn-reset').onclick = resetView;
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); toggleHold(); }
+  if (e.code === 'KeyR') { resetView(); }
+});
+
+// Editable average window size
+document.getElementById('avg-window').addEventListener('blur', (e) => {
+  const n = parseInt(e.target.textContent, 10);
+  if (!isNaN(n) && n > 0) {
+    avgWindowSize = n;
+    // Trim ring if window shrank
+    while (avgRing.length > avgWindowSize) avgRing.shift();
+  } else {
+    e.target.textContent = avgWindowSize;
+  }
+});
+document.getElementById('avg-window').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+});
+
+const streamUrl = window.location.origin + '/stream';
+let es = null;
+let lastMsgTime = 0;
+
+function connectSSE() {
+  if (es) { try { es.close(); } catch (e) {} }
+  es = new EventSource(streamUrl);
+
+  es.onopen = () => { log('SSE connected'); setStatus(true); };
+
+  es.onerror = () => {
+    setStatus(false);
+    // The browser will auto-retry; just show offline until onopen fires again.
+  };
+
+  es.onmessage = (e) => {
+    lastMsgTime = performance.now();
+    if (!startTime) startTime = lastMsgTime;
+    try {
+      const batch = JSON.parse(e.data);
+      if (!batch.length) return;
+
+      const ptsI = [];
+      batch.forEach(pt => {
+        const t = pt.x / 1000;
+        ptsI.push({ time: t, value: pt.i });
+        pushAvgSample(pt.i);
+      });
+
+      if (held) {
+        heldQueue.push(...ptsI);
+      } else {
+        let didTrim = false;
+        for (const p of ptsI) {
+          dataI.push(p);
+          if (dataI.length > maxPoints) { dataI.shift(); didTrim = true; }
+        }
+        if (didTrim) {
+          if (chartI && chartI.series) chartI.series.setData(dataI);
+        } else {
+          const lastI = ptsI[ptsI.length - 1];
+          if (chartI && chartI.series) chartI.series.update(lastI);
+        }
+        if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
+      }
+
+      const now = performance.now();
+      if (now - lastStatsUiTime >= STATS_UI_INTERVAL_MS) {
+        updateStats(batch[batch.length - 1]);
+        lastStatsUiTime = now;
+      }
+      setStatus(true);
+    } catch (e) {
+      err('Message handler error: ' + e.message);
+    }
+  };
+}
+
+const STATS_UI_INTERVAL_MS = 1000;
+let lastStatsUiTime = 0;
+
+connectSSE();
+
+// Detect stale connection (sleep, Wi-Fi drop, etc.)
+setInterval(() => {
+  const silent = performance.now() - lastMsgTime;
+  if (lastMsgTime && silent > 3000) {
+    setStatus(false);
+    if (es.readyState !== EventSource.OPEN) {
+      connectSSE();
+    }
+  }
+}, 1000);
+
+// Reconnect aggressively when tab wakes from sleep
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && es.readyState !== EventSource.OPEN) {
+    connectSSE();
+  }
+});
+
+window.addEventListener('resize', () => {
+  const container = document.getElementById('chartI');
+  if (chartI && chartI.chart) chartI.chart.applyOptions({
+    width: container.clientWidth,
+    height: container.clientHeight
+  });
+});
+</script>
+</body>
+</html>
