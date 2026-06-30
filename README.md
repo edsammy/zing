@@ -1,4 +1,4 @@
-# Zing — INA current monitor suite
+# Zing — INA228 current + power monitor tool
 
 Poor man's [Joulescope](https://www.joulescope.com). Def some bugs here but works good enough. Buy a Joulescope if you want it good.
 
