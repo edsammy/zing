@@ -3,6 +3,7 @@ import serial.tools.list_ports
 import asyncio
 import json
 import sys
+import time
 import argparse
 from collections import deque
 from pathlib import Path
@@ -24,6 +25,19 @@ _data_buf = deque(maxlen=BUF_MAXLEN)
 _broadcast_event = asyncio.Event()
 _web_host = WEB_HOST
 _web_port = WEB_PORT
+_last_print_time = 0
+_print_interval = 0.5  # print live value every 500ms
+
+
+def _format_live(d):
+    return (
+        f"I={d['i']:>9.6f}A  "
+        f"V={d['v']:>6.3f}V  "
+        f"P={d['p']:>7.3f}W  "
+        f"Q={d['q']:>9.6f}C  "
+        f"E={d['e']:>9.6f}J  "
+        f"t={d['t']}ms"
+    )
 
 # ---------------------------------------------------------------------------
 # Serial auto-detect (same as logger.py)
@@ -61,6 +75,14 @@ def buf_push(d):
 
 
 def buf_get_series(since_ms=0):
+    if not _data_buf:
+        return []
+    # Detect source reboot: newest timestamp is older than last sent
+    if _data_buf[-1][0] < since_ms:
+        return [
+            {"x": t, "i": i, "v": v, "p": p, "q": q, "e": e}
+            for t, i, v, p, q, e in _data_buf
+        ]
     return [
         {"x": t, "i": i, "v": v, "p": p, "q": q, "e": e}
         for t, i, v, p, q, e in _data_buf
@@ -72,34 +94,68 @@ def buf_get_series(since_ms=0):
 # Async serial reader
 # ---------------------------------------------------------------------------
 
-async def serial_reader(port, baud):
-    loop = asyncio.get_event_loop()
-    try:
-        ser = serial.Serial(port, baud, timeout=0.1)
-    except serial.SerialException as e:
-        print(f"Serial error: {e}", file=sys.stderr)
-        return
-
-    print(f"Connected to {port} at {baud} baud.", file=sys.stderr)
-
-    def read_line():
-        line = ser.readline()
-        return line.decode().strip() if line else None
-
+async def serial_reader(explicit_port, baud):
+    raw_buf = b""
     while True:
-        line = await loop.run_in_executor(None, read_line)
-        if not line:
-            await asyncio.sleep(0.001)
+        port = explicit_port or find_pico_port()
+        if not port:
+            print("No serial port found — retrying in 2s", file=sys.stderr)
+            await asyncio.sleep(2)
             continue
+
         try:
-            d = json.loads(line)
-            if "error" in d:
-                print(f"ERROR: {d['error']}", file=sys.stderr)
-                continue
-            buf_push(d)
-            _broadcast_event.set()
-        except json.JSONDecodeError:
+            ser = serial.Serial(port, baud, timeout=0)
+        except serial.SerialException as e:
+            print(f"Serial: {e} — retrying in 2s", file=sys.stderr)
+            await asyncio.sleep(2)
+            continue
+
+        _data_buf.clear()
+        print(f"Connected to {port} at {baud} baud.", file=sys.stderr)
+
+        while True:
+            try:
+                n = ser.in_waiting
+            except (serial.SerialException, OSError):
+                break
+
+            if n:
+                try:
+                    raw_buf += ser.read(n)
+                except (serial.SerialException, OSError):
+                    break
+
+                while b"\n" in raw_buf:
+                    line, raw_buf = raw_buf.split(b"\n", 1)
+                    text = line.decode().strip()
+                    if not text:
+                        continue
+                    try:
+                        d = json.loads(text)
+                        if "error" in d:
+                            print(f"ERROR: {d['error']}", file=sys.stderr)
+                            continue
+                        buf_push(d)
+                        _broadcast_event.set()
+                        global _last_print_time
+                        now = time.time()
+                        if sys.stdout.isatty() and now - _last_print_time >= _print_interval:
+                            sys.stdout.write("\r" + " " * 80 + "\r")
+                            sys.stdout.write(_format_live(d))
+                            sys.stdout.flush()
+                            _last_print_time = now
+                    except json.JSONDecodeError:
+                        pass
+            else:
+                await asyncio.sleep(0.005)
+
+        try:
+            ser.close()
+        except Exception:
             pass
+        raw_buf = b""
+        print("Serial lost — reconnecting...", file=sys.stderr)
+        await asyncio.sleep(2)
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +275,10 @@ def main():
     parser.add_argument("--web-host", default=WEB_HOST, help=f"Web dashboard host (default: {WEB_HOST})")
     args = parser.parse_args()
 
-    serial_port = args.port or find_pico_port()
-    if not serial_port:
-        print("No serial port found.", file=sys.stderr)
-        sys.exit(1)
+    if args.port and not find_pico_port():
+        # Sanity check: explicit port may not exist yet, but that's ok —
+        # serial_reader will retry until it appears.
+        pass
 
     global _web_host, _web_port
     _web_host = args.web_host
@@ -230,14 +286,17 @@ def main():
 
     async def run_all():
         await asyncio.gather(
-            serial_reader(serial_port, args.baud),
+            serial_reader(args.port, args.baud),
             http_server(),
         )
 
     try:
         asyncio.run(run_all())
     except KeyboardInterrupt:
-        print("\nStopped.", file=sys.stderr)
+        if sys.stdout.isatty():
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        print("Stopped.", file=sys.stderr)
 
 
 if __name__ == "__main__":

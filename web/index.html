@@ -436,9 +436,24 @@ function connectSSE() {
         pushAvgSample(pt.i);
       });
 
-      if (held) {
-        heldQueue.push(...ptsI);
-      } else {
+    if (held) {
+      heldQueue.push(...ptsI);
+    } else {
+      const lastChartTime = dataI.length ? dataI[dataI.length - 1].time : 0;
+      const newTime = ptsI[0].time;
+      let timeReset = false;
+
+      if (lastChartTime && newTime < lastChartTime) {
+        // Pico rebooted / reconnected — timestamps reset
+        timeReset = true;
+        dataI = [];
+        heldQueue = [];
+        avgRing = [];
+        startTime = 0;
+        if (chartI && chartI.series) chartI.series.setData(dataI);
+      }
+
+      if (!timeReset) {
         let didTrim = false;
         for (const p of ptsI) {
           dataI.push(p);
@@ -450,17 +465,18 @@ function connectSSE() {
           const lastI = ptsI[ptsI.length - 1];
           if (chartI && chartI.series) chartI.series.update(lastI);
         }
-        if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
       }
+      if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
+    }
 
-      const now = performance.now();
-      if (now - lastStatsUiTime >= STATS_UI_INTERVAL_MS) {
-        updateStats(batch[batch.length - 1]);
-        lastStatsUiTime = now;
-      }
-      setStatus(true);
-    } catch (e) {
-      err('Message handler error: ' + e.message);
+    const now = performance.now();
+    if (now - lastStatsUiTime >= STATS_UI_INTERVAL_MS) {
+      updateStats(batch[batch.length - 1]);
+      lastStatsUiTime = now;
+    }
+    setStatus(true);
+  } catch (e) {
+    err('Message handler error: ' + e.message);
     }
   };
 }
