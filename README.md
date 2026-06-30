@@ -43,6 +43,7 @@ python web/webdash.py
 - [pico-sdk](https://github.com/raspberrypi/pico-sdk)
 - ARM GCC toolchain
 - CMake 3.31 (pico-sdk is currently incompatible with CMake 4.x)
+- [picotool](https://github.com/raspberrypi/picotool) (optional — enables button-free flashing)
 - pyserial
 
 ## References
