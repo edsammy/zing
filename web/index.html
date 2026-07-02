@@ -180,6 +180,7 @@ function formatDuration(ms) {
 }
 
 function pushAvgSample(amps) {
+  if (amps == null || isNaN(amps)) return;
   avgRing.push(amps);
   while (avgRing.length > avgWindowSize) avgRing.shift();
 }
@@ -190,6 +191,7 @@ function err(msg) { console.error('[dash] ERROR: ' + msg); document.getElementBy
 let _currentUnit = 'A'; // 'A' | 'mA' | 'µA'
 
 function formatCurrent(amps) {
+  if (amps == null || isNaN(amps)) amps = 0;
   const absA = Math.abs(amps);
   if (_currentUnit === 'A') {
     if (absA < 0.9) _currentUnit = 'mA';
@@ -271,7 +273,7 @@ function makeChart(containerId, title, color, fillColor, formatPrice) {
       return;
     }
     const data = param.seriesData.get(series);
-    if (!data || data.value === undefined) {
+    if (!data || data.value == null || isNaN(data.value)) {
       tooltip.style.display = 'none';
       return;
     }
@@ -295,6 +297,7 @@ function makeChart(containerId, title, color, fillColor, formatPrice) {
 let _chartUnit = 'A'; // 'A' | 'mA' | 'µA'
 
 function formatCurrentChartPrice(amps) {
+  if (amps == null || isNaN(amps)) amps = 0;
   const absA = Math.abs(amps);
   if (_chartUnit === 'A') {
     if (absA < 0.9) _chartUnit = 'mA';
@@ -323,20 +326,27 @@ try {
 }
 
 function updateStats(d) {
-  document.getElementById('val-v').textContent = d.v.toFixed(2);
-  const iFmt = formatCurrent(d.i);
+  if (!d) return;
+  const v = (d.v != null && !isNaN(d.v)) ? d.v : 0;
+  const i = (d.i != null && !isNaN(d.i)) ? d.i : 0;
+  const p = (d.p != null && !isNaN(d.p)) ? d.p : 0;
+  const q = (d.q != null && !isNaN(d.q)) ? d.q : 0;
+  const e = (d.e != null && !isNaN(d.e)) ? d.e : 0;
+
+  document.getElementById('val-v').textContent = v.toFixed(2);
+  const iFmt = formatCurrent(i);
   document.getElementById('val-i').textContent = iFmt.value;
   document.getElementById('unit-i').textContent = ' ' + iFmt.unit;
   const avgI = avgRing.length ? avgRing.reduce((a, b) => a + b, 0) / avgRing.length : 0;
   const avgFmt = formatCurrent(avgI);
   document.getElementById('val-avg-i').textContent = avgFmt.value;
   document.getElementById('unit-avg-i').textContent = ' ' + avgFmt.unit;
-  document.getElementById('val-p').textContent = d.p.toFixed(2);
+  document.getElementById('val-p').textContent = p.toFixed(2);
   if (startTime) {
     document.getElementById('val-uptime').textContent = formatDuration(performance.now() - startTime);
   }
-  document.getElementById('val-q').textContent = d.q.toFixed(3);
-  document.getElementById('val-e').textContent = d.e.toFixed(3);
+  document.getElementById('val-q').textContent = q.toFixed(3);
+  document.getElementById('val-e').textContent = e.toFixed(3);
 }
 
 function setStatus(online) {
@@ -353,9 +363,14 @@ function setStatus(online) {
   }
 }
 
+function isValidPoint(p) {
+  return p && p.time != null && !isNaN(p.time) && p.value != null && !isNaN(p.value);
+}
+
 function flushQueue() {
   if (!heldQueue.length) return;
   for (const p of heldQueue) {
+    if (!isValidPoint(p)) continue;
     dataI.push(p);
     if (dataI.length > maxPoints) dataI.shift();
   }
@@ -427,11 +442,13 @@ function connectSSE() {
     if (!startTime) startTime = lastMsgTime;
     try {
       const batch = JSON.parse(e.data);
-      if (!batch.length) return;
+      if (!batch || !batch.length) return;
 
       const ptsI = [];
       batch.forEach(pt => {
+        if (!pt || pt.x == null || pt.i == null) return;
         const t = pt.x / 1000;
+        if (isNaN(t) || isNaN(pt.i)) return;
         ptsI.push({ time: t, value: pt.i });
         pushAvgSample(pt.i);
       });
@@ -440,10 +457,10 @@ function connectSSE() {
       heldQueue.push(...ptsI);
     } else {
       const lastChartTime = dataI.length ? dataI[dataI.length - 1].time : 0;
-      const newTime = ptsI[0].time;
+      const newTime = ptsI.length ? ptsI[0].time : null;
       let timeReset = false;
 
-      if (lastChartTime && newTime < lastChartTime) {
+      if (lastChartTime && newTime != null && newTime < lastChartTime) {
         // Pico rebooted / reconnected — timestamps reset
         timeReset = true;
         dataI = [];
@@ -456,6 +473,7 @@ function connectSSE() {
       if (!timeReset) {
         let didTrim = false;
         for (const p of ptsI) {
+          if (!isValidPoint(p)) continue;
           dataI.push(p);
           if (dataI.length > maxPoints) { dataI.shift(); didTrim = true; }
         }
@@ -463,7 +481,7 @@ function connectSSE() {
           if (chartI && chartI.series) chartI.series.setData(dataI);
         } else {
           const lastI = ptsI[ptsI.length - 1];
-          if (chartI && chartI.series) chartI.series.update(lastI);
+          if (lastI && chartI && chartI.series) chartI.series.update(lastI);
         }
       }
       if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();

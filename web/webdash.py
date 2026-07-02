@@ -64,13 +64,16 @@ def find_pico_port():
 # ---------------------------------------------------------------------------
 
 def buf_push(d):
+    def _num(key, default):
+        v = d.get(key, default)
+        return v if v is not None else default
     _data_buf.append((
-        d.get("t", 0),
-        d.get("i", 0.0),
-        d.get("v", 0.0),
-        d.get("p", 0.0),
-        d.get("q", 0.0),
-        d.get("e", 0.0),
+        _num("t", 0),
+        _num("i", 0.0),
+        _num("v", 0.0),
+        _num("p", 0.0),
+        _num("q", 0.0),
+        _num("e", 0.0),
     ))
 
 
