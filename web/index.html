@@ -160,7 +160,7 @@ button.active { background: #33ff33; color: #0a0a0a; }
 </div>
 
 <script>
-const maxPoints = 10000;
+const maxPoints = 3000;
 let dataI = [];
 let held = false;
 let heldQueue = [];
@@ -239,9 +239,9 @@ function makeChart(containerId, title, color, fillColor, formatPrice) {
     timeScale: {
       borderColor: '#1a331a',
       timeVisible: true,
-      secondsVisible: false,
+      secondsVisible: true,
       tickMarkFormatter: (time, tickMarkType, locale) => {
-        return time.toFixed(0);
+        return (time / 1000).toFixed(1) + 's';
       },
     },
     crosshair: {
@@ -367,6 +367,23 @@ function isValidPoint(p) {
   return p && p.time != null && !isNaN(p.time) && p.value != null && !isNaN(p.value);
 }
 
+// Throttle chart renders to 10 Hz to avoid memory pressure / canvas loss
+let _chartFlushTimer = null;
+let _chartNeedsSync = false;
+function scheduleChartSync() {
+  _chartNeedsSync = true;
+  if (_chartFlushTimer) return;
+  _chartFlushTimer = setTimeout(() => {
+    _chartFlushTimer = null;
+    if (!chartI || !chartI.series) return;
+    if (_chartNeedsSync) {
+      chartI.series.setData(dataI);
+      _chartNeedsSync = false;
+    }
+    if (chartI.chart) chartI.chart.timeScale().scrollToRealTime();
+  }, 100);
+}
+
 function flushQueue() {
   if (!heldQueue.length) return;
   for (const p of heldQueue) {
@@ -375,8 +392,7 @@ function flushQueue() {
     if (dataI.length > maxPoints) dataI.shift();
   }
   heldQueue = [];
-  if (chartI && chartI.series) chartI.series.setData(dataI);
-  if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
+  scheduleChartSync();
 }
 
 function toggleHold() {
@@ -396,6 +412,7 @@ function resetView() {
   const btn = document.getElementById('btn-hold');
   btn.textContent = 'HOLD [space]';
   btn.classList.remove('active');
+  scheduleChartSync();
   if (chartI && chartI.chart) chartI.chart.timeScale().fitContent();
   setStatus(true);
 }
@@ -447,9 +464,8 @@ function connectSSE() {
       const ptsI = [];
       batch.forEach(pt => {
         if (!pt || pt.x == null || pt.i == null) return;
-        const t = pt.x / 1000;
-        if (isNaN(t) || isNaN(pt.i)) return;
-        ptsI.push({ time: t, value: pt.i });
+        if (isNaN(pt.x) || isNaN(pt.i)) return;
+        ptsI.push({ time: pt.x, value: pt.i });
         pushAvgSample(pt.i);
       });
 
@@ -467,24 +483,17 @@ function connectSSE() {
         heldQueue = [];
         avgRing = [];
         startTime = 0;
-        if (chartI && chartI.series) chartI.series.setData(dataI);
+        scheduleChartSync();
       }
 
       if (!timeReset) {
-        let didTrim = false;
         for (const p of ptsI) {
           if (!isValidPoint(p)) continue;
           dataI.push(p);
-          if (dataI.length > maxPoints) { dataI.shift(); didTrim = true; }
+          if (dataI.length > maxPoints) dataI.shift();
         }
-        if (didTrim) {
-          if (chartI && chartI.series) chartI.series.setData(dataI);
-        } else {
-          const lastI = ptsI[ptsI.length - 1];
-          if (lastI && chartI && chartI.series) chartI.series.update(lastI);
-        }
+        scheduleChartSync();
       }
-      if (chartI && chartI.chart) chartI.chart.timeScale().scrollToRealTime();
     }
 
     const now = performance.now();
@@ -517,8 +526,11 @@ setInterval(() => {
 
 // Reconnect aggressively when tab wakes from sleep
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && es.readyState !== EventSource.OPEN) {
-    connectSSE();
+  if (!document.hidden) {
+    scheduleChartSync();
+    if (es.readyState !== EventSource.OPEN) {
+      connectSSE();
+    }
   }
 });
 
